@@ -1,0 +1,18 @@
+Metadata-Version: 2.4
+Name: edgebench
+Version: 0.1.0
+Summary: Edge AI benchmarking framework
+Requires-Python: >=3.9
+Requires-Dist: numpy
+Requires-Dist: torch
+Requires-Dist: pandas
+Provides-Extra: train
+Requires-Dist: timm; extra == "train"
+Requires-Dist: torchvision; extra == "train"
+Requires-Dist: pillow; extra == "train"
+Requires-Dist: tqdm; extra == "train"
+Provides-Extra: onnx
+Requires-Dist: onnx; extra == "onnx"
+Requires-Dist: onnxruntime; extra == "onnx"
+Provides-Extra: dev
+Requires-Dist: pytest; extra == "dev"

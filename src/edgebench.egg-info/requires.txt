@@ -1,0 +1,16 @@
+numpy
+torch
+pandas
+
+[dev]
+pytest
+
+[onnx]
+onnx
+onnxruntime
+
+[train]
+timm
+torchvision
+pillow
+tqdm
