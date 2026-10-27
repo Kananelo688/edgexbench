@@ -785,7 +785,7 @@ class ModelRegistry:
             also_available_in=others,
         )
 
-#TO DO: Implement BackboneProvider and DetectionProvider classes, 
+#TO DO: Implement BackboneProvider and DetectorProvider classes, 
 # following the same pattern as TimmProvider and TorchvisionProvider, 
 # to support additional model sources and types.
 
