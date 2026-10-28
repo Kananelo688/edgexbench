@@ -1,5 +1,6 @@
 """
 FILENAME:       src/edgebench/train/trainer.py
+
 DESCRIPTION:    Training loop for one model under one recipe. A single implementation is used
                 for every architecture, which is what makes the resulting accuracies a
                 comparison of architectures rather than of training procedures. Supports
@@ -7,6 +8,7 @@ DESCRIPTION:    Training loop for one model under one recipe. A single implement
                 trained at the recipe's effective batch size, and resumes from a per-epoch
                 checkpoint pinned to the recipe digest.
 AUTHOR:         Kananelo Chabeli
+
 DATE-CREATED:   2026-10-27
 """
 
@@ -280,7 +282,7 @@ class Trainer:
         self.accum = run.accumulation_steps(recipe)
         self.micro_bs = run.micro_batch_size or recipe.batch_size
 
-    # ---- mixup --------------------------------------------------------------------------
+    #  mixup
 
     def _make_mixer(self):
         """Construct the mixup and CutMix transform, if the recipe enables it.
@@ -537,7 +539,7 @@ class Trainer:
             raise TrainingError(
                 f"nothing to train: resume point is at or beyond epochs={self.recipe.epochs}")
 
-        peak_mb = (round(torch.cuda.max_memory_allocated() / 2 ** 20, 1)
+        peak_mb = (round(torch.cuda.max_memory_allocated() / 1024 ** 2, 1)
                    if self.device.type == "cuda" else None)
         resolved.module = model
         return TrainingResult(
@@ -547,3 +549,7 @@ class Trainer:
             train_minutes=round(session_seconds / 60, 2),
             seconds_per_epoch=round(session_seconds / len(history), 1),
             peak_memory_mb=peak_mb, history=history)
+
+
+# TO DO: Implement Custom classes that implement training loops for other tasks: Detection, Face Detection, Recognition,
+# Tracking,Segmentation.

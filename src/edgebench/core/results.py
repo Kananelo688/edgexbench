@@ -1,10 +1,9 @@
 """
 FILENAME:       src/edgebench/core/results.py
-DESCRIPTION:    CSV-backed ledger of completed work. Owns the "already done" decision for every
-                stage of the pipeline, so a sweep can be interrupted and resumed without
+DESCRIPTION:    CSV-backed ledger of completed work. It keeps track of all models and owns the "already done" decision for every
+                stage of the benchmarking pipeline. This is so that a sweep can be interrupted and resumed without
                 repeating finished work or, more importantly, without treating a partial result
-                as finished. Writes are atomic and keyed on (entity, recipe digest), so a
-                recipe change invalidates prior rows rather than silently mixing two
+                as finished. The writes are atomic and keyed on (entity, recipe digest), so a recipe change invalidates prior rows rather than silently mixing two
                 experimental conditions in one table.
 AUTHOR:         Kananelo Chabeli
 DATE-CREATED:   2026-10-27
@@ -155,7 +154,7 @@ class ResultsStore:
         """
         return self._read(self.layout.epochs_path)
 
-    # ---- the skip decision --------------------------------------------------------------
+    # ---- the skip decision 
 
     def artifact_path(self, name: str, suffix: str = ".pt") -> Path:
         """Resolve the artefact path for an entity.

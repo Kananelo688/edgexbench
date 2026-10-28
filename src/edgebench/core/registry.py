@@ -577,7 +577,8 @@ class ExternalProvider(ModelProvider):
 
 
 class ModelRegistry:
-    """Resolves architecture names across an ordered set of providers.
+    """
+    Resolves architecture names across an ordered set of providers.
 
     Constructed explicitly so tests can supply their own providers; module-level helpers wrap a
     shared default instance for ordinary use.

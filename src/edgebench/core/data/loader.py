@@ -1,8 +1,8 @@
 """
 FILENAME:       src/edgebench/core/data/loader.py
 
-DESCRIPTION:    Batch iteration over a decoded image cache, and device-side augmentation.
-                Replaces torch.utils.data.DataLoader: with images already decoded, a batch is a
+DESCRIPTION:   This is from-scratch, custom loader module. It implements custom batch iteration over a decoded image cache, 
+                and device-side augmentation. Replaces torch.utils.data.DataLoader: with images already decoded, a batch is a
                 single indexed read from a memory map, so worker processes add overhead and
                 failure modes without adding throughput. Augmentation runs on the accelerator
                 for the same reason - performing it per-image on the host would reinstate the
@@ -40,15 +40,17 @@ class LoaderError(RuntimeError):
 
 @dataclass(frozen=True)
 class Normalisation:
-    """Channel normalisation applied after augmentation.
+    """
+    Channel normalisation applied after augmentation.
 
     Attributes:
         mean: Per-channel means in [0,1] space.
         std: Per-channel standard deviations in [0,1] space.
     """
-
-    mean: tuple[float, float, float] = IMAGENET_MEAN
-    std: tuple[float, float, float] = IMAGENET_STD
+    #These must be replaced with statistics for different datasets.
+    # These statistics can be replaced by those of a different datasets.
+    mean: tuple[float, float, float] = IMAGENET_MEAN 
+    std: tuple[float, float, float] = IMAGENET_STD 
 
     def tensors(self, device: torch.device | str,
                 dtype: torch.dtype = torch.float32) -> tuple[torch.Tensor, torch.Tensor]:
@@ -101,7 +103,8 @@ def random_resized_crop_flip(batch_u8: torch.Tensor,
                              ratio: tuple[float, float],
                              hflip_prob: float,
                              generator: torch.Generator | None = None) -> torch.Tensor:
-    """Apply per-sample random-resized-crop and horizontal flip to a whole batch on device.
+    """
+    Apply per-sample random-resized-crop and horizontal flip to a whole batch on device.
 
     Crops are extracted with roi_align, which cuts and bilinearly resamples every box in one
     batched call; a per-image loop would cost more than the convolutions that follow.

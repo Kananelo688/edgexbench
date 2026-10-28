@@ -3,7 +3,7 @@
 FILENAME:       src/edgebench/train/classification.py
 DESCRIPTION:    Command-line entry point for classification training. Builds the decoded-image
                 caches if absent, then trains every model in the experiment that is not already
-                finished under the current recipe. Wiring only: the training logic lives in
+                finished under the current recipe. This is just entery-point the training logic lives in
                 train/trainer.py and the policy in core/.
 AUTHOR:         Kananelo Chabeli
 DATE-CREATED:   2026-10-27

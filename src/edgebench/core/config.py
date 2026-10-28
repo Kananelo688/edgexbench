@@ -1,12 +1,15 @@
 """
 FILENAME:       src/edgebench/core/config.py
-DESCRIPTION:    Configuration objects for training runs, split into a hashed recipe and an
-                unhashed execution config. The split is structural: every field of RecipeConfig
-                affects the trained weights and is therefore included in the recipe digest,
-                while RunConfig holds only execution settings that cannot. This removes the
-                need for a manually maintained hash-exclusion list, which is a silent source of
-                invalid provenance when a new field is added and forgotten.
+
+DESCRIPTION:This Module Defines Configurations for training and benchmark experiments.
+            Configs are hashed, to ensure consistency of the experiments, and enforce the single-recipe-rule for all
+            Models under training. To be specific, the confif is split into a hashed recipe and an
+            unhashed execution config. This split is structural: every field of RecipeConfig
+            affects the trained weights and is therefore MUST be included in the recipe digest,
+            while RunConfig holds only execution settings that cannot. 
+
 AUTHOR:         Kananelo Chabeli
+
 DATE-CREATED:   2026-10-27
 """
 
@@ -62,9 +65,12 @@ def _coerce_pair(value: Any, name: str) -> tuple[float, float]:
 class RecipeConfig:
     """Training settings that determine the trained weights.
 
-    Every field here is hashed. Two runs sharing a digest were trained under identical
-    conditions, which is the claim a cross-architecture comparison depends on. Anything that
+    Every field here is hashed. This guarantees that two runs sharing a digest must have been trained under identical
+    conditions, and the claim of a cross-architecture comparison depends on it. Anything that
     cannot change the weights belongs in RunConfig instead.
+
+    The datafiekd defined here are default configs, for the experiments, but they can be overridden by
+    json configuration file, or for an ordinary python dictionary.
 
     NOTE: Adding a field to this class changes the digest of every existing recipe, even when
     the new field's default reproduces the previous behaviour. This is deliberate and fails
@@ -304,14 +310,14 @@ class RecipeConfig:
 
 @dataclass
 class RunConfig:
-    """Execution settings that cannot change the trained weights.
+    """
+    Execution settings that cannot change the trained weights, so they are not hashed.
 
-    Excluded from the recipe digest by construction. Mutable, unlike RecipeConfig, because
-    these are routinely adjusted between runs of the same recipe.
 
-    NOTE: micro_batch_size is here rather than in RecipeConfig because gradient accumulation
+
+    NOTE: micro_batch_size hyperparameter is here rather than in RecipeConfig because gradient accumulation
     keeps the effective batch size fixed. Normalisation statistics are still computed per
-    micro-batch, so the equivalence is close but not exact; record the value used when
+    micro-batch, so the equivalence is close but not exact; One must record the value used when
     reporting, and keep it constant for any model whose result will be compared directly.
 
     Attributes:

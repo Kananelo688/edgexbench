@@ -1,13 +1,16 @@
 """
 FILENAME:       src/edgebench/core/data/cache.py
-DESCRIPTION:    Decoded-image cache: writes a dataset once into a uint8 NHWC memory-mapped array
-                plus labels and provenance, and reads it back. Exists because JPEG decoding is
-                the binding constraint on a modest CPU well below what a GPU consumes and would aterve the GPU.Thus,
-                decoding is paid once rather than every epoch.
+
+DESCRIPTION:    This builds a decoded image cache for cases where training compute is not sufficient.
+                Since decoding images during training (which happens on a CPU) can be slow, it can stall the GPU and result in
+                inefficient training speed. This module define routines that writes a dataset and decode it once into a uint8 NHWC memory-mapped array
+                plus labels and provenance, and reads it back. 
+                
                 The storage format is task-agnostic. The preprocessing transform is supplied by
-                the caller, so classification resize-and-crop and detection letterboxing use the
-                same machinery.
+                the caller, so classification resize-and-crop and detection letterboxing use the same machinery.
+
 AUTHOR:         Kananelo Chabeli
+
 DATE-CREATED:   2026-10-27
 """
 
