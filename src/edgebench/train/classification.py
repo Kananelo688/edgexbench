@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-FILENAME:       src/edgebench/train/classification.py
+FILENAME:       src/edgexbench/train/classification.py
 DESCRIPTION:    Command-line entry point for classification training. Builds the decoded-image
                 caches if absent, then trains every model in the experiment that is not already
                 finished under the current recipe. This is just entery-point the training logic lives in
@@ -20,15 +20,15 @@ from typing import Any, Sequence
 
 import numpy as np
 
-from edgebench.core.artifacts import CheckpointMeta, load_checkpoint, save_checkpoint
-from edgebench.core.config import ConfigError, ExperimentConfig, RecipeConfig, RunConfig
-from edgebench.core.data.cache import (LABEL_FROM, CacheError, ImageCache, build_cache,
+from edgexbench.core.artifacts import CheckpointMeta, load_checkpoint, save_checkpoint
+from edgexbench.core.config import ConfigError, ExperimentConfig, RecipeConfig, RunConfig
+from edgexbench.core.data.cache import (LABEL_FROM, CacheError, ImageCache, build_cache,
                                        cache_exists, discover_class_folders)
-from edgebench.core.paths import PathError, Paths, ensure_dir, get_paths
-from edgebench.core.registry import ModelSpec, RegistryError
-from edgebench.core.results import (STATUS_COMPLETED, STATUS_FAILED, ResultsError,
+from edgexbench.core.paths import PathError, Paths, ensure_dir, get_paths
+from edgexbench.core.registry import ModelSpec, RegistryError
+from edgexbench.core.results import (STATUS_COMPLETED, STATUS_FAILED, ResultsError,
                                     ResultsLayout, ResultsStore)
-from edgebench.train.trainer import EpochRecord, Trainer, TrainingResult, resolve_device
+from edgexbench.train.trainer import EpochRecord, Trainer, TrainingResult, resolve_device
 
 TASK = "classification"
 

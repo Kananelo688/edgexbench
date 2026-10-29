@@ -1,5 +1,5 @@
 """
-FILENAME:       src/edgebench/core/results.py
+FILENAME:       src/edgexbench/core/results.py
 DESCRIPTION:    CSV-backed ledger of completed work. It keeps track of all models and owns the "already done" decision for every
                 stage of the benchmarking pipeline. This is so that a sweep can be interrupted and resumed without
                 repeating finished work or, more importantly, without treating a partial result

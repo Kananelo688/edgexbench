@@ -8,10 +8,10 @@ import dataclasses
 import pytest
 import yaml
 
-from edgebench.core.artifacts import strip_wrapper_prefixes
-from edgebench.core.config import ConfigError, RecipeConfig, RunConfig
-from edgebench.core.registry import ModelRegistry, TimmProvider, get_registry
-from edgebench.core.results import STATUS_COMPLETED, ResultsLayout, ResultsStore
+from edgexbench.core.artifacts import strip_wrapper_prefixes
+from edgexbench.core.config import ConfigError, RecipeConfig, RunConfig
+from edgexbench.core.registry import ModelRegistry, TimmProvider, get_registry
+from edgexbench.core.results import STATUS_COMPLETED, ResultsLayout, ResultsStore
 
 
 def test_yaml_scientific_notation_is_a_float():

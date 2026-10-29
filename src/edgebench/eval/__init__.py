@@ -1,1 +1,1 @@
-"""edgebench.eval package."""
+"""edgexbench.eval package."""

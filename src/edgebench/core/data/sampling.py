@@ -1,5 +1,5 @@
 """
-FILENAME:       src/edgebench/core/data/sampling.py
+FILENAME:       src/edgexbench/core/data/sampling.py
 
 DESCRIPTION:    Index selection and batching for evaluation and calibration subsets. Operates on
                 counts and group keys only; it has no knowledge of images, files or tasks.

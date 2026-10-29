@@ -1,1 +1,1 @@
-"""edgebench.hardware package."""
+"""edgexbench.hardware package."""

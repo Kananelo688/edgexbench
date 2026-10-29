@@ -1,5 +1,5 @@
 """
-FILENAME:       src/edgebench/train/trainer.py
+FILENAME:       src/edgexbench/train/trainer.py
 
 DESCRIPTION:    Training loop for one model under one recipe. A single implementation is used
                 for every architecture, which is what makes the resulting accuracies a
@@ -26,13 +26,13 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from edgebench.core.artifacts import CheckpointMeta, load_checkpoint, save_checkpoint
-from edgebench.core.config import RecipeConfig, RunConfig
-from edgebench.core.data.cache import ImageCache
-from edgebench.core.data.loader import (CacheLoader, Normalisation, centre_view, normalise,
+from edgexbench.core.artifacts import CheckpointMeta, load_checkpoint, save_checkpoint
+from edgexbench.core.config import RecipeConfig, RunConfig
+from edgexbench.core.data.cache import ImageCache
+from edgexbench.core.data.loader import (CacheLoader, Normalisation, centre_view, normalise,
                                         random_resized_crop_flip)
-from edgebench.core.data.sampling import random_subset
-from edgebench.core.registry import ModelRegistry, ModelSpec, ResolvedModel, get_registry
+from edgexbench.core.data.sampling import random_subset
+from edgexbench.core.registry import ModelRegistry, ModelSpec, ResolvedModel, get_registry
 
 # Micro-batches between loss finiteness checks when log_every is 0. Each check is one
 # device-to-host sync, so this is frequent enough to stop a diverged run early and rare enough

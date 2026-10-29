@@ -1,5 +1,5 @@
 """
-FILENAME:       src/edgebench/core/registry.py
+FILENAME:       src/edgexbench/core/registry.py
 
 DESCRIPTION:    Model registry resolving an architecture name to an untrained nn.Module, across
                 timm, torchvision and externally sourced implementations. Resolution records the

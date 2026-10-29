@@ -5,10 +5,10 @@ from __future__ import annotations
 import pytest
 import torch
 
-from edgebench.core.artifacts import load_checkpoint
-from edgebench.core.config import RecipeConfig, RunConfig
-from edgebench.core.registry import ModelSpec
-from edgebench.train.trainer import Trainer, TrainingError
+from edgexbench.core.artifacts import load_checkpoint
+from edgexbench.core.config import RecipeConfig, RunConfig
+from edgexbench.core.registry import ModelSpec
+from edgexbench.train.trainer import Trainer, TrainingError
 
 from helpers import FakeCache, tiny_registry
 

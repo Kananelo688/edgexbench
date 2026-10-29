@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 from torch import nn
 
-from edgebench.core.registry import ModelRegistry
+from edgexbench.core.registry import ModelRegistry
 
 
 class FakeCache:

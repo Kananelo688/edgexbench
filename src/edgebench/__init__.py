@@ -1,1 +1,1 @@
-"""edgebench package."""
+"""edgexbench package."""

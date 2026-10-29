@@ -1,5 +1,5 @@
 """
-FILENAME:       src/edgebench/core/config.py
+FILENAME:       src/edgexbench/core/config.py
 
 DESCRIPTION:This Module Defines Configurations for training and benchmark experiments.
             Configs are hashed, to ensure consistency of the experiments, and enforce the single-recipe-rule for all

@@ -1,5 +1,5 @@
 """
-FILENAME:       src/edgebench/core/data/cache.py
+FILENAME:       src/edgexbench/core/data/cache.py
 
 DESCRIPTION:    This builds a decoded image cache for cases where training compute is not sufficient.
                 Since decoding images during training (which happens on a CPU) can be slow, it can stall the GPU and result in

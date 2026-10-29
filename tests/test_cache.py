@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from edgebench.core.data.cache import (CacheError, ImageCache, build_cache, cache_exists,
+from edgexbench.core.data.cache import (CacheError, ImageCache, build_cache, cache_exists,
                                        cache_paths, discover_class_folders)
 
 RES = 8

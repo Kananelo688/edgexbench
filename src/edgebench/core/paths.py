@@ -1,7 +1,7 @@
 """
-FILENAME:       src/edgebench/core/paths.py
+FILENAME:       src/edgexbench/core/paths.py
 
-DESCRIPTION:    Canonical filesystem layout for the edgebench framework. Every module resolves
+DESCRIPTION:    Canonical filesystem layout for the edgexbench framework. Every module resolves
                 paths through this file so the directory structure is defined exactly once.
                 Code root and data root are separable, which allows the repository to live on a
                 home filesystem while datasets and artefacts sit on cluster scratch storage.
@@ -31,15 +31,15 @@ from typing import Final, Iterable
 ROOT_MARKERS: Final[tuple[str, ...]] = ("pyproject.toml",)
 
 # Project name a root's pyproject.toml must declare.
-PROJECT_NAME: Final[str] = "edgebench"
+PROJECT_NAME: Final[str] = "edgexbench"
 _PROJECT_NAME_LINE: Final[re.Pattern[str]] = re.compile(
     r'^\s*name\s*=\s*["\']' + re.escape(PROJECT_NAME) + r'["\']\s*$', re.MULTILINE)
 
 # Environment overrides. ROOT relocates everything; 
 # DATA_ROOT relocates only the generated
 # trees, which is the common case on a cluster where code is on $HOME and data on scratch.
-ENV_ROOT: Final[str] = "EDGEBENCH_ROOT"
-ENV_DATA_ROOT: Final[str] = "EDGEBENCH_DATA_ROOT"
+ENV_ROOT: Final[str] = "EDGEXBENCH_ROOT"
+ENV_DATA_ROOT: Final[str] = "EDGEXBENCH_DATA_ROOT"
 
 # Checkpoint representations. Each is a stage in the conversion chain, not an arbitrary label.
 CHECKPOINT_STAGES: Final[tuple[str, ...]] = ("pytorch", "onnx")
@@ -110,7 +110,7 @@ def _is_project_root(candidate: Path) -> bool:
         candidate: Directory to test.
 
     Returns:
-        True if it holds a pyproject.toml declaring name = "edgebench".
+        True if it holds a pyproject.toml declaring name = "edgexbench".
     """
     marker = candidate / ROOT_MARKERS[0]
     if not marker.is_file():
@@ -191,7 +191,7 @@ def ensure_dir(path: Path) -> Path:
 @dataclass(frozen=True)
 class Paths:
     """
-    Resolved filesystem layout for one edgebench project.
+    Resolved filesystem layout for one edgexbench project.
 
     Frozen and explicitly constructed so tests can point an instance at a temporary directory.
     Accessors are pure path arithmetic and never touch the filesystem; call ensure_dir on the

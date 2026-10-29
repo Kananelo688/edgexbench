@@ -1,1 +1,1 @@
-"""edgebench.train package."""
+"""edgexbench.train package."""

@@ -1,5 +1,5 @@
 """
-FILENAME:       src/edgebench/core/artifacts.py
+FILENAME:       src/edgexbench/core/artifacts.py
 DESCRIPTION:    Checkpoint writing and reading. A checkpoint carries enough provenance to
                 rebuild its architecture and reproduce its evaluation without consulting the
                 code that produced it: the resolved implementation and its version, the recipe
@@ -19,8 +19,8 @@ from typing import Any, Mapping
 import torch
 from torch import nn
 
-from edgebench.core.config import RecipeConfig
-from edgebench.core.registry import ModelRegistry, ModelSpec, get_registry
+from edgexbench.core.config import RecipeConfig
+from edgexbench.core.registry import ModelRegistry, ModelSpec, get_registry
 
 # Format version of the checkpoint dictionary. Incremented when the key layout changes, so a
 # reader can refuse an incompatible file rather than fail obscurely on a missing key.

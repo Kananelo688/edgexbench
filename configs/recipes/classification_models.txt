@@ -1,0 +1,16 @@
+"mobilenetv1_100",
+"mobilenetv2_100",
+"mobilenetv3_small_100",
+"mobilenetv3_large_100",
+"mobilenetv4_conv_small",
+"mobilenetv4_hybrid_medium", 
+"efficientnet_lite0",        
+"efficientnet_b0",          
+"ghostnet_100",
+"ghostnetv2_100",
+"ghostnetv3_100",
+{"name": "shufflenet_v2_x1_0", "source": "torchvision"},
+"squeezenet1_0",
+"squeezenet1_1",
+
+   

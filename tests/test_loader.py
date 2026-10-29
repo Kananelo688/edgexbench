@@ -8,7 +8,7 @@ import time
 import numpy as np
 import pytest
 
-from edgebench.core.data.loader import CacheLoader, LoaderError
+from edgexbench.core.data.loader import CacheLoader, LoaderError
 
 from helpers import FakeCache
 

@@ -1,5 +1,5 @@
 """Scratch: poke at the registry interactively. Not a test; prints, does not assert."""
-from edgebench.core.registry import ModelRegistry
+from edgexbench.core.registry import ModelRegistry
 
 reg = ModelRegistry()
 

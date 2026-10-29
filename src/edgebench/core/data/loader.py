@@ -1,5 +1,5 @@
 """
-FILENAME:       src/edgebench/core/data/loader.py
+FILENAME:       src/edgexbench/core/data/loader.py
 
 DESCRIPTION:   This is from-scratch, custom loader module. It implements custom batch iteration over a decoded image cache, 
                 and device-side augmentation. Replaces torch.utils.data.DataLoader: with images already decoded, a batch is a
@@ -26,8 +26,8 @@ import numpy as np
 import torch
 from torchvision.ops import roi_align
 
-from edgebench.core.data.cache import ImageCache
-from edgebench.core.data.sampling import iter_batches
+from edgexbench.core.data.cache import ImageCache
+from edgexbench.core.data.sampling import iter_batches
 
 # ImageNet-1k channel statistics, the torchvision and timm defaults. Held in [0,1] space and
 # scaled at use, since cached pixels are raw uint8.
