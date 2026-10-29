@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable, Mapping, Sequence
@@ -23,6 +24,9 @@ from typing import Any, Iterable, Mapping, Sequence
 STATUS_COMPLETED = "completed"
 STATUS_FAILED = "failed"
 STATUS_SKIPPED = "skipped"
+
+# Characters replaced when an entity name becomes a filename.
+_UNSAFE_FILENAME = re.compile(r"[^A-Za-z0-9._-]")
 
 
 class ResultsError(RuntimeError):
@@ -133,8 +137,13 @@ class ResultsStore:
         pd = _require_pandas()
         if not path.exists():
             return pd.DataFrame()
+        # [AUDIT R1] Type inference turned digest "012345678901" into 12345678901 and model
+        # name "100" into an int, so is_done never matched and the model retrained every run.
+        # Identifier columns are now always read as text.
+        # Before:
+        #   return pd.read_csv(path)
         try:
-            return pd.read_csv(path)
+            return pd.read_csv(path, dtype={self.key: str, "recipe_digest": str})
         except Exception as exc:
             raise ResultsError(f"could not read {path}: {exc}") from exc
 
@@ -164,9 +173,14 @@ class ResultsStore:
             suffix: Artefact extension.
 
         Returns:
-            Path to the artefact.
+            Path to the artefact. Characters that are unsafe in a filename, such as the "/" and
+            ":" in a timm "hf-hub:org/model" name, are replaced with "_".
         """
-        return self.layout.artifact_dir / f"{name}{suffix}"
+        # [AUDIT P6] The name was used verbatim, so "/" or ":" in it produced a nested or
+        # invalid path.
+        # Before:
+        #   return self.layout.artifact_dir / f"{name}{suffix}"
+        return self.layout.artifact_dir / f"{_UNSAFE_FILENAME.sub('_', name)}{suffix}"
 
     def is_done(self, name: str, digest: str, suffix: str = ".pt") -> bool:
         """Report whether an entity is finished under the current recipe.
@@ -258,7 +272,8 @@ class ResultsStore:
         out = pd.concat([df, pd.DataFrame([dict(row)])], ignore_index=True)
         atomic_write_text(self.layout.epochs_path, out.to_csv(index=False))
 
-    def truncate_epochs(self, name: str, after_epoch: int = 0) -> None:
+    def truncate_epochs(self, name: str, after_epoch: int = 0,
+                        digest: str | None = None) -> None:
         """Discard logged epochs beyond a resume point.
 
         A run that crashes between logging an epoch and writing its checkpoint would otherwise
@@ -267,6 +282,8 @@ class ResultsStore:
         Args:
             name: Entity identifier.
             after_epoch: Highest epoch number to keep.
+            digest: Restrict truncation to rows of this recipe digest. None truncates every
+                recipe's rows for the entity.
 
         Returns:
             None.
@@ -274,7 +291,14 @@ class ResultsStore:
         df = self.epochs()
         if df.empty or not {self.key, "epoch"}.issubset(df.columns):
             return
-        keep = ~((df[self.key] == name) & (df["epoch"] > after_epoch))
+        # [AUDIT R3] Truncation matched on name only, so resuming one recipe could delete or
+        # keep rows that belonged to another. It can now be keyed on (name, digest).
+        # Before:
+        #   keep = ~((df[self.key] == name) & (df["epoch"] > after_epoch))
+        match = (df[self.key] == name) & (df["epoch"] > after_epoch)
+        if digest is not None and "recipe_digest" in df.columns:
+            match &= df["recipe_digest"] == str(digest)
+        keep = ~match
         atomic_write_text(self.layout.epochs_path, df[keep].to_csv(index=False))
 
     def clear(self, name: str) -> None:

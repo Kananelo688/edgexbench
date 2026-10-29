@@ -1,0 +1,20 @@
+# [AUDIT K3] Previously empty: bytecode and build metadata were committed, and the generated
+# data trees (all inside the repo by default) were one `git add .` away from being committed.
+
+# Python bytecode and build output
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# Generated trees (see core/paths.py). calib_datasets/ is deliberately NOT ignored: it is
+# committed so the calibration set is byte-identical across backends.
+/datasets/
+/binaries/
+/results/
+test/
+# Tooling
+.pytest_cache/
+
+.obsidian/

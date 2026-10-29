@@ -121,11 +121,44 @@ def strip_wrapper_prefixes(state: Mapping[str, Any]) -> dict[str, Any]:
     Returns:
         The state dictionary with any single uniform prefix removed.
     """
+    # [AUDIT A1] A single pass in fixed order left "_orig_mod." on DDP(compile(model)) keys
+    # ("module._orig_mod.fc.weight" -> "_orig_mod.fc.weight"). Strip until nothing changes.
+    # Before:
+    #   out = dict(state)
+    #   for prefix in WRAPPER_PREFIXES:
+    #       if out and all(k.startswith(prefix) for k in out):
+    #           out = {k[len(prefix):]: v for k, v in out.items()}
+    #   return out
     out = dict(state)
-    for prefix in WRAPPER_PREFIXES:
-        if out and all(k.startswith(prefix) for k in out):
-            out = {k[len(prefix):]: v for k, v in out.items()}
+    stripped = True
+    while out and stripped:
+        stripped = False
+        for prefix in WRAPPER_PREFIXES:
+            if all(k.startswith(prefix) for k in out):
+                out = {k[len(prefix):]: v for k, v in out.items()}
+                stripped = True
     return out
+
+
+def _is_state_dict(candidate: Any) -> bool:
+    """Report whether a mapping looks like a module state dictionary.
+
+    Args:
+        candidate: Object to test.
+
+    Returns:
+        True when it is a non-empty mapping of tensors, allowing the non-tensor values that
+        modules store under keys ending in "_extra_state".
+    """
+    if not isinstance(candidate, Mapping) or not candidate:
+        return False
+    tensors = 0
+    for k, v in candidate.items():
+        if torch.is_tensor(v):
+            tensors += 1
+        elif not str(k).endswith("_extra_state"):
+            return False
+    return tensors > 0
 
 
 def extract_state_dict(obj: Any) -> dict[str, Any]:
@@ -143,13 +176,19 @@ def extract_state_dict(obj: Any) -> dict[str, Any]:
     Raises:
         ArtifactError: If no tensor mapping can be found.
     """
+    # [AUDIT A2] Every value had to be a tensor, which rejected modules that store
+    # "_extra_state" entries.
+    # Before:
+    #   if isinstance(candidate, Mapping) and candidate and \
+    #           all(torch.is_tensor(v) for v in candidate.values()):
+    #   ...
+    #   if obj and all(torch.is_tensor(v) for v in obj.values()):
     if isinstance(obj, Mapping):
         for key in ("state_dict", "model", "model_state_dict", "net"):
             candidate = obj.get(key)
-            if isinstance(candidate, Mapping) and candidate and \
-                    all(torch.is_tensor(v) for v in candidate.values()):
+            if _is_state_dict(candidate):
                 return dict(candidate)
-        if obj and all(torch.is_tensor(v) for v in obj.values()):
+        if _is_state_dict(obj):
             return dict(obj)
     raise ArtifactError(
         f"no state dictionary found; top-level keys: {list(obj)[:10] if isinstance(obj, Mapping) else type(obj)}")
@@ -168,10 +207,23 @@ def infer_num_classes(state: Mapping[str, Any]) -> int | None:
     Returns:
         The inferred class count, or None when no suitable tensor is present.
     """
+    key = classifier_weight_key(state)
+    return None if key is None else int(state[key].shape[0])
+
+
+def classifier_weight_key(state: Mapping[str, Any]) -> str | None:
+    """Locate the tensor infer_num_classes reads the class count from.
+
+    Args:
+        state: State dictionary.
+
+    Returns:
+        The key of the last weight tensor with at least two dimensions, or None.
+    """
     for key in reversed(list(state)):
         tensor = state[key]
         if torch.is_tensor(tensor) and tensor.ndim >= 2 and key.endswith("weight"):
-            return int(tensor.shape[0])
+            return key
     return None
 
 
@@ -262,9 +314,17 @@ def read_meta(payload: Mapping[str, Any], fallback_name: str = "") -> Checkpoint
     meta = CheckpointMeta.from_dict(payload.get("meta") or {})
     if not meta.name:
         meta.name = fallback_name
+    # [AUDIT A3] The inference is a heuristic; the tensor it chose is now printed so a wrong
+    # guess is visible.
+    # Before:
+    #   state = strip_wrapper_prefixes(extract_state_dict(payload))
+    #   meta.num_classes = infer_num_classes(state) or 0
     if not meta.num_classes:
         state = strip_wrapper_prefixes(extract_state_dict(payload))
         meta.num_classes = infer_num_classes(state) or 0
+        if meta.num_classes:
+            print(f"  NOTE: inferred num_classes={meta.num_classes} for {meta.name!r} "
+                  f"from {classifier_weight_key(state)!r}")
     return meta
 
 

@@ -16,6 +16,7 @@ from __future__ import annotations
 import importlib
 import sys
 from abc import ABC, abstractmethod
+from types import MappingProxyType
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
@@ -57,6 +58,26 @@ class ModelSpec:
     name: str
     source: str | None = None
     kwargs: Mapping[str, Any] = field(default_factory=dict)
+
+    # [AUDIT G2] frozen=True promised immutability, but kwargs stayed a mutable dict and the
+    # generated __hash__ raised TypeError on it. kwargs is now a read-only view and hashing
+    # uses a canonical rendering of it.
+    # Before: (no __post_init__ / __hash__; kwargs stored as the dict passed in)
+    def __post_init__(self) -> None:
+        """Freeze kwargs into a read-only mapping.
+
+        Returns:
+            None.
+        """
+        object.__setattr__(self, "kwargs", MappingProxyType(dict(self.kwargs)))
+
+    def __hash__(self) -> int:
+        """Hash on name, source and a canonical rendering of kwargs.
+
+        Returns:
+            The hash value.
+        """
+        return hash((self.name, self.source, repr(sorted(self.kwargs.items()))))
 
     @classmethod
     def coerce(cls, value: "ModelSpec | str | Mapping[str, Any]") -> "ModelSpec":
@@ -202,9 +223,27 @@ class ModelProvider(ABC):
             Sorted architecture names, empty when the provider is unavailable.
         """
 
+    def effective_kwargs(self, name: str, kwargs: Mapping[str, Any]) -> dict[str, Any]:
+        """Resolve the constructor arguments actually used for an architecture.
+
+        Providers override this to force arguments the trainer depends on. The result is what
+        gets recorded in provenance, so a forced argument is never invisible.
+
+        Args:
+            name: Architecture identifier.
+            kwargs: Arguments requested by the spec.
+
+        Returns:
+            The arguments to build with.
+
+        Raises:
+            RegistryError: If a requested argument conflicts with a forced one.
+        """
+        return dict(kwargs)
+
 
 def _try_import(module_name: str):
-    """Import a module, returning None when it is absent.
+    """Import a module, returning None when it is absent or broken.
 
     Args:
         module_name: Fully qualified module name.
@@ -212,9 +251,21 @@ def _try_import(module_name: str):
     Returns:
         The imported module, or None if it cannot be imported.
     """
+    # [AUDIT G3] A broken install (e.g. a timm built against another torch) raises errors
+    # other than ImportError; those used to crash every resolution. They now disable the one
+    # provider, with the reason printed rather than hidden.
+    # Before:
+    #   try:
+    #       return importlib.import_module(module_name)
+    #   except ImportError:
+    #       return None
     try:
         return importlib.import_module(module_name)
     except ImportError:
+        return None
+    except Exception as exc:
+        print(f"  WARNING: {module_name} is installed but failed to import "
+              f"({type(exc).__name__}: {exc}); treating it as unavailable")
         return None
 
 
@@ -317,6 +368,14 @@ class TorchvisionProvider(ModelProvider):
 
     source = SOURCE_TORCHVISION
 
+    # Architectures whose auxiliary classifier heads make the training forward pass return a
+    # tuple. The shared trainer optimises a single head, so these are built single-headed and
+    # the forced argument is recorded in provenance.
+    SINGLE_HEAD_KWARGS: Mapping[str, Mapping[str, Any]] = {
+        "inception_v3": {"aux_logits": False},
+        "googlenet": {"aux_logits": False},
+    }
+
     def __init__(self) -> None:
         self._tv = None
         self._probed = False
@@ -342,10 +401,22 @@ class TorchvisionProvider(ModelProvider):
         Returns:
             The set of classification architecture names, empty when torchvision is absent.
         """
+        # [AUDIT G3] list_models(module=...) only exists from torchvision 0.14; on older
+        # releases this raised AttributeError inside every resolve(). Fall back to the public
+        # lowercase builders in torchvision.models.
+        # Before:
+        #   self._names = (frozenset(lib.models.list_models(module=lib.models))
+        #                  if lib else frozenset())
         if self._names is None:
             lib = self._lib()
-            self._names = (frozenset(lib.models.list_models(module=lib.models))
-                           if lib else frozenset())
+            if lib is None:
+                self._names = frozenset()
+            elif hasattr(lib.models, "list_models"):
+                self._names = frozenset(lib.models.list_models(module=lib.models))
+            else:
+                self._names = frozenset(
+                    n for n, obj in vars(lib.models).items()
+                    if callable(obj) and n.islower() and not n.startswith("_"))
         return self._names
 
     def available(self) -> bool:
@@ -375,6 +446,33 @@ class TorchvisionProvider(ModelProvider):
             True if torchvision knows the name.
         """
         return name in self._model_names()
+
+    def effective_kwargs(self, name: str, kwargs: Mapping[str, Any]) -> dict[str, Any]:
+        """Force single-head construction for architectures with auxiliary classifiers.
+
+        Args:
+            name: Architecture identifier.
+            kwargs: Arguments requested by the spec.
+
+        Returns:
+            The requested arguments plus any forced ones.
+
+        Raises:
+            RegistryError: If the spec explicitly asks for an auxiliary head.
+        """
+        # [AUDIT T9] In train mode torchvision's inception_v3 and googlenet returned a
+        # namedtuple and crashed the trainer at logits.float(). Unwrapping the tuple in the
+        # trainer would silently drop a head the model was built with, so the head is
+        # disabled here, recorded in provenance, and an explicit request for it fails loudly.
+        # Before: (kwargs were passed through unchanged)
+        out = dict(kwargs)
+        for key, forced in self.SINGLE_HEAD_KWARGS.get(name, {}).items():
+            if key in out and out[key] != forced:
+                raise RegistryError(
+                    f"{name!r} with {key}={out[key]!r} is not supported: the trainer optimises "
+                    f"a single classifier head, so {key} must be {forced!r}")
+            out[key] = forced
+        return out
 
     def build(self, name: str, num_classes: int, **kwargs: Any) -> nn.Module:
         """Instantiate a torchvision architecture without pretrained weights.
@@ -593,13 +691,28 @@ class ModelRegistry:
             order: Provider identifiers in resolution priority order. Defaults to
                 DEFAULT_RESOLUTION_ORDER.
         """
+        # [AUDIT G1] With a custom provider list that lacked an ExternalProvider,
+        # register_external wrote into an orphan provider that resolution never consulted.
+        # One is now always part of the provider set.
+        # Before:
+        #   self.external = ExternalProvider()
+        #   if providers is None:
+        #       providers = [self.external, TimmProvider(), TorchvisionProvider()]
+        #   else:
+        #       for p in providers:
+        #           if isinstance(p, ExternalProvider):
+        #               self.external = p
+        #   self._providers: dict[str, ModelProvider] = {p.source: p for p in providers}
         self.external = ExternalProvider()
         if providers is None:
             providers = [self.external, TimmProvider(), TorchvisionProvider()]
         else:
-            for p in providers:
-                if isinstance(p, ExternalProvider):
-                    self.external = p
+            providers = list(providers)
+            supplied = [p for p in providers if isinstance(p, ExternalProvider)]
+            if supplied:
+                self.external = supplied[0]
+            else:
+                providers.append(self.external)
         self._providers: dict[str, ModelProvider] = {p.source: p for p in providers}
         self._order = tuple(order or DEFAULT_RESOLUTION_ORDER)
 
@@ -775,14 +888,21 @@ class ModelRegistry:
                     f"comes from an outside repository.")
             chosen, others = found[0], tuple(found[1:])
 
-        module = self._providers[chosen].build(spec.name, num_classes, **dict(spec.kwargs))
+        # [AUDIT T9] Build with, and record, the provider's effective kwargs so a forced
+        # argument such as aux_logits=False appears in every checkpoint's provenance.
+        # Before:
+        #   module = self._providers[chosen].build(spec.name, num_classes, **dict(spec.kwargs))
+        #   ... kwargs=dict(spec.kwargs),
+        provider = self._providers[chosen]
+        kwargs = provider.effective_kwargs(spec.name, spec.kwargs)
+        module = provider.build(spec.name, num_classes, **kwargs)
         return ResolvedModel(
             module=module,
             name=spec.name,
             source=chosen,
             provider_version=self._provider_version(chosen, spec.name),
             num_classes=num_classes,
-            kwargs=dict(spec.kwargs),
+            kwargs=kwargs,
             also_available_in=others,
         )
 

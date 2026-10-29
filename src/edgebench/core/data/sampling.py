@@ -287,9 +287,13 @@ def iter_batches(n_total: int, batch_size: int,
 
     n = len(source)
     for start in range(0, n, batch_size):
-        # min(start + batch_size, n) rather than start + batch_size: without the clamp the final
-        # slice overruns the selection and the caller silently processes more items than it
-        # requested, which corrupts any metric computed over a subset.
+        # [AUDIT S1] The old comment claimed the slice would overrun without min(); numpy
+        # slices already stop at the end of the array. The clamp is kept only to make the bound
+        # explicit.
+        # Before:
+        #   # min(start + batch_size, n) rather than start + batch_size: without the clamp the final
+        #   # slice overruns the selection and the caller silently processes more items than it
+        #   # requested, which corrupts any metric computed over a subset.
         yield source[start:min(start + batch_size, n)]
 
 

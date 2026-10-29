@@ -20,9 +20,20 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final, Iterable
 
-# Presence of any of these at a directory marks it as the repos11itory root. pyproject.toml is
-# authoritative; the others cover a partially initialised checkout.
-ROOT_MARKERS: Final[tuple[str, ...]] = ("pyproject.toml", ".git", "configs")
+# [AUDIT H2] A directory is the repository root only if its pyproject.toml declares this
+# project. The generic markers (".git", "configs") matched unrelated directories, such as a
+# dotfiles repository in $HOME above a site-packages install.
+# [AUDIT H1] Also fixes the "repos11itory" typo.
+# Before:
+#   # Presence of any of these at a directory marks it as the repos11itory root. pyproject.toml is
+#   # authoritative; the others cover a partially initialised checkout.
+#   ROOT_MARKERS: Final[tuple[str, ...]] = ("pyproject.toml", ".git", "configs")
+ROOT_MARKERS: Final[tuple[str, ...]] = ("pyproject.toml",)
+
+# Project name a root's pyproject.toml must declare.
+PROJECT_NAME: Final[str] = "edgebench"
+_PROJECT_NAME_LINE: Final[re.Pattern[str]] = re.compile(
+    r'^\s*name\s*=\s*["\']' + re.escape(PROJECT_NAME) + r'["\']\s*$', re.MULTILINE)
 
 # Environment overrides. ROOT relocates everything; 
 # DATA_ROOT relocates only the generated
@@ -92,13 +103,32 @@ def _validate_choice(value: str, allowed: Iterable[str], kind: str) -> str:
     return value
 
 
-def find_project_root(start: Path | None = None) -> Path:
-    """Locate the repository root by searching upward for a marker file.
+def _is_project_root(candidate: Path) -> bool:
+    """Report whether a directory is this project's repository root.
 
-    Resolution order is EDGEBENCH_ROOT, then an upward search from `start`. Marker search is
-    used rather than arithmetic on __file__ because the package may be installed in editable
-    or site-packages form, where the module's location says nothing about where the data trees
-    are.
+    Args:
+        candidate: Directory to test.
+
+    Returns:
+        True if it holds a pyproject.toml declaring name = "edgebench".
+    """
+    marker = candidate / ROOT_MARKERS[0]
+    if not marker.is_file():
+        return False
+    try:
+        return bool(_PROJECT_NAME_LINE.search(marker.read_text(errors="replace")))
+    except OSError:
+        return False
+
+
+def find_project_root(start: Path | None = None) -> Path:
+    """Locate the repository root by searching upward for this project's pyproject.toml.
+
+    Resolution order is EDGEBENCH_ROOT, then an upward search from `start`, then an upward
+    search from the current working directory. Marker search is used rather than arithmetic on
+    __file__ because the package may be installed in editable or site-packages form, where the
+    module's location says nothing about where the data trees are; the working-directory pass
+    covers a site-packages install run from inside the checkout.
 
     Args:
         start: Directory to begin the upward search from. Defaults to this file's directory.
@@ -107,7 +137,7 @@ def find_project_root(start: Path | None = None) -> Path:
         Absolute path to the repository root.
 
     Raises:
-        PathError: If EDGEBENCH_ROOT is set but does not exist, or no marker is found.
+        PathError: If EDGEBENCH_ROOT is set but does not exist, or no root is found.
     """
     env = os.environ.get(ENV_ROOT)
     if env:
@@ -116,14 +146,24 @@ def find_project_root(start: Path | None = None) -> Path:
             raise PathError(f"{ENV_ROOT} points at {root}, which is not a directory")
         return root
 
-    here = (start or Path(__file__).parent).expanduser().resolve()
-    for candidate in (here, *here.parents):
-        if any((candidate / m).exists() for m in ROOT_MARKERS):
-            return candidate
+    # [AUDIT H2] Any of the generic markers used to qualify, and only the module's own location
+    # was searched.
+    # Before:
+    #   here = (start or Path(__file__).parent).expanduser().resolve()
+    #   for candidate in (here, *here.parents):
+    #       if any((candidate / m).exists() for m in ROOT_MARKERS):
+    #           return candidate
+    searched = []
+    for origin in (start or Path(__file__).parent, Path.cwd()):
+        here = origin.expanduser().resolve()
+        searched.append(str(here))
+        for candidate in (here, *here.parents):
+            if _is_project_root(candidate):
+                return candidate
 
     raise PathError(
-        f"could not locate the project root above {here}. Expected one of {ROOT_MARKERS}. "
-        f"Set {ENV_ROOT} to the repository root."
+        f"could not locate the project root above {searched}: no pyproject.toml declaring "
+        f"name = {PROJECT_NAME!r}. Set {ENV_ROOT} to the repository root."
     )
 
 
@@ -403,9 +443,13 @@ class Paths:
         }
 
 
-# Module-level instance for ordinary use. Construction is lazy via __getattr__ so that importing
-# this module outside a project tree does not raise; tests and tools that need an explicit
-# layout should build their own Paths instance instead.
+# [AUDIT H1] The comment named a module __getattr__ that does not exist.
+# Before:
+#   # Module-level instance for ordinary use. Construction is lazy via __getattr__ so that importing
+#   # this module outside a project tree does not raise; ...
+# Module-level instance for ordinary use. Construction is lazy, deferred to the first
+# get_paths() call, so that importing this module outside a project tree does not raise; tests
+# and tools that need an explicit layout should build their own Paths instance instead.
 _PATHS: Paths | None = None
 
 

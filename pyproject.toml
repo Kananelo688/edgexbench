@@ -7,12 +7,25 @@ name = "edgebench"
 version = "0.1.0"
 description = "Edge AI benchmarking framework"
 requires-python = ">=3.9"
-dependencies = ["numpy", "torch", "pandas"]
+# [AUDIT K2] pyyaml (config files) was undeclared; torchvision is imported when the core
+# loader module loads; pillow is needed to build caches; timm is required by the default
+# recipe, which enables mixup.
+# Before:
+#   dependencies = ["numpy", "torch", "pandas"]
+#   [project.optional-dependencies]
+#   train = ["timm", "torchvision", "pillow", "tqdm"]
+dependencies = ["numpy", "torch", "torchvision", "pandas", "pyyaml", "pillow", "timm"]
 
 [project.optional-dependencies]
-train = ["timm", "torchvision", "pillow", "tqdm"]
+train = ["tqdm"]
 onnx  = ["onnx", "onnxruntime"]
 dev   = ["pytest"]
 
+# [AUDIT K1] Without include, namespace discovery also installed eval, hardware and tasks as
+# top-level packages. Those now live under src/edgebench/.
+# Before:
+#   [tool.setuptools.packages.find]
+#   where = ["src"]
 [tool.setuptools.packages.find]
 where = ["src"]
+include = ["edgebench*"]

@@ -46,6 +46,12 @@ LABEL_DTYPE = np.int64
 # progress-reporting granularity.
 BUILD_CHUNK: int = 512
 
+# How a sample's label is read from its path. The two conventions conflict, so the caller must
+# choose; neither can be inferred safely from the tree.
+#   "parent": the directory containing the image (Kaggle ImageNet-100: <part>/<class>/x.JPEG).
+#   "top":    the first directory below the root (Tiny-ImageNet: <class>/images/x.JPEG).
+LABEL_FROM: tuple[str, ...] = ("parent", "top")
+
 
 class CacheError(RuntimeError):
     """Raised when a cache cannot be built, is malformed, or is inconsistent with its request."""
@@ -91,17 +97,21 @@ class DiscoveredSamples:
 def discover_class_folders(roots: Sequence["str | Path"],
                            classes: Sequence[str] | None = None,
                            exclude_dirs: Iterable[str] = EXCLUDED_DIR_NAMES,
-                           extensions: Iterable[str] = IMAGE_EXTENSIONS) -> DiscoveredSamples:
+                           extensions: Iterable[str] = IMAGE_EXTENSIONS,
+                           *,
+                           label_from: str = "parent") -> DiscoveredSamples:
     """
     Walk one or more roots holding per-class sub-directories.
 
-    A sample's label is the name of the directory immediately containing it, so the same class
-    appearing under several roots is merged. This is required by datasets distributed in parts,
-    such as the Kaggle ImageNet-100 release, where the four train parts each hold a different
-    subset of classes.
+    With label_from="parent" (the default), a sample's label is the name of the directory
+    immediately containing it, so the same class appearing under several roots, or under
+    several part directories of one root, is merged. This is required by datasets distributed
+    in parts, such as the Kaggle ImageNet-100 release, where the four train parts each hold a
+    different subset of classes. With label_from="top" the label is the first directory below
+    the root, for trees that nest images inside each class (Tiny-ImageNet's <class>/images/).
 
-    Results are sorted by path so the cache is byte-identical on every run and every operating
-    system, which is what allows a stored digest to serve as a correctness check.
+    Results are sorted by root, then by relative POSIX path, so the sample order and therefore
+    the label digest are identical on every run and every operating system.
 
     Args:
         roots: Directories to walk.
@@ -111,14 +121,17 @@ def discover_class_folders(roots: Sequence["str | Path"],
         exclude_dirs: Directory names to skip, compared case-insensitively against every path
             component.
         extensions: Accepted file extensions, compared lowercased.
+        label_from: One of LABEL_FROM: "parent" or "top".
 
     Returns:
         The discovered samples and class list.
 
     Raises:
-        CacheError: If a root is missing, no images are found, or the discovered class set
-            differs from the supplied canonical list.
+        CacheError: If a root is missing, label_from is unknown, no images are found, the
+            canonical list holds duplicates, or the discovered class set differs from it.
     """
+    if label_from not in LABEL_FROM:
+        raise CacheError(f"label_from must be one of {LABEL_FROM}, got {label_from!r}")
     roots = [Path(r).expanduser().resolve() for r in roots]
     for r in roots:
         if not r.is_dir():
@@ -127,17 +140,36 @@ def discover_class_folders(roots: Sequence["str | Path"],
     exts = {e.lower() for e in extensions}
     skip = {d.lower() for d in exclude_dirs}
 
-    found: dict[str, list[Path]] = {}
-    for root in roots:
+    found: dict[str, list[tuple[int, str, Path]]] = {}
+    for root_index, root in enumerate(roots):
         for p in root.rglob("*"):
             if p.suffix.lower() not in exts or not p.is_file():
+                continue
+            # [AUDIT C7] Hidden files such as macOS "._x.jpg" resource forks carry an image
+            # extension but are not images, and aborted the build at decode time.
+            # Before: (no check)
+            if p.name.startswith("."):
                 continue
             rel = p.parent.relative_to(root)
             if {part.lower() for part in rel.parts} & skip:
                 continue
-            # The label is the immediately containing directory, never the part or root name.
-            label = p.parent.name
-            found.setdefault(label, []).append(p)
+            # [AUDIT C1] A file directly in a root used to be labelled with the root's own name,
+            # contradicting the comment that the label is never the part or root name. Nested
+            # layouts are handled by label_from="top" rather than by changing the default, which
+            # would collapse the Kaggle layout to its part directories when walked from the
+            # dataset root.
+            # Before:
+            #   # The label is the immediately containing directory, never the part or root name.
+            #   label = p.parent.name
+            if not rel.parts:
+                continue
+            label = p.parent.name if label_from == "parent" else rel.parts[0]
+            # [AUDIT C6] Sorting by absolute Path is case-insensitive on Windows and
+            # case-sensitive on POSIX, so the order differed between them. The sort key is now
+            # (root index, relative POSIX path).
+            # Before: found.setdefault(label, []).append(p)
+            found.setdefault(label, []).append(
+                (root_index, p.relative_to(root).as_posix(), p))
 
     if not found:
         raise CacheError(f"no images found under {[str(r) for r in roots]}")
@@ -147,6 +179,11 @@ def discover_class_folders(roots: Sequence["str | Path"],
         class_list = discovered
     else:
         class_list = list(classes)
+        # [AUDIT C7] Duplicates passed the set comparison below but left the index map wrong.
+        # Before: (no check)
+        if len(set(class_list)) != len(class_list):
+            dupes = sorted({c for c in class_list if class_list.count(c) > 1})
+            raise CacheError(f"canonical class list has duplicate entries: {dupes[:5]}")
         if set(discovered) != set(class_list):
             missing = sorted(set(class_list) - set(discovered))
             extra = sorted(set(discovered) - set(class_list))
@@ -155,8 +192,12 @@ def discover_class_folders(roots: Sequence["str | Path"],
                 f"{len(missing)} missing {missing[:5]}, {len(extra)} unexpected {extra[:5]}")
 
     index = {c: i for i, c in enumerate(class_list)}
-    samples = sorted(((p, index[label]) for label, paths in found.items() for p in paths),
-                     key=lambda t: t[0])
+    # Before:
+    #   samples = sorted(((p, index[label]) for label, paths in found.items() for p in paths),
+    #                    key=lambda t: t[0])
+    keyed = sorted((root_index, rel, p, index[label])
+                   for label, entries in found.items() for root_index, rel, p in entries)
+    samples = [(p, label_index) for _, _, p, label_index in keyed]
     return DiscoveredSamples(samples=samples, classes=class_list, roots=roots)
 
 
@@ -331,6 +372,13 @@ def build_cache(samples: Sequence[tuple[Path, int]],
             f"cache already present for {split}@{resolution}px in {cache_dir}; "
             f"pass overwrite=True to rebuild")
     Path(cache_dir).mkdir(parents=True, exist_ok=True)
+    # [AUDIT C2] The old image array used to stay published throughout a rebuild, so a crash
+    # after the new labels and metadata were written left a "complete" cache pairing old
+    # pixels with new labels, which open() accepted. The previous cache is now withdrawn
+    # before anything is written, so an interrupted rebuild reads as absent.
+    # Before: (nothing removed; the old files were only replaced at the end)
+    for key in ("images", "meta", "labels"):
+        paths[key].unlink(missing_ok=True)
 
     n = len(samples)
     n_classes = len(classes)
@@ -342,6 +390,10 @@ def build_cache(samples: Sequence[tuple[Path, int]],
 
     if workers is None:
         workers = min(12, (os.cpu_count() or 4) * 2)
+    # [AUDIT C8] workers=0 used to surface as a bare ValueError from ThreadPoolExecutor.
+    # Before: (no check)
+    if workers < 1:
+        raise CacheError(f"workers must be at least 1, got {workers}")
 
     from PIL import Image
 
@@ -353,39 +405,72 @@ def build_cache(samples: Sequence[tuple[Path, int]],
 
         Returns:
             The index and its HWC uint8 array.
+
+        Raises:
+            CacheError: If the file cannot be decoded or transformed, naming the file.
         """
         path = samples[i][0]
-        # convert("RGB") is mandatory, not defensive: ImageNet contains greyscale and CMYK
-        # files that would otherwise yield one- or four-channel arrays.
-        with Image.open(path) as im:
-            arr = transform(im.convert("RGB"))
+        # [AUDIT C3] A corrupt file raised a bare PIL error with no path, after possibly
+        # hours of decoding. The failing file is now named.
+        # Before:
+        #   with Image.open(path) as im:
+        #       arr = transform(im.convert("RGB"))
+        #   return i, arr
+        try:
+            # convert("RGB") is mandatory, not defensive: ImageNet contains greyscale and CMYK
+            # files that would otherwise yield one- or four-channel arrays.
+            with Image.open(path) as im:
+                arr = transform(im.convert("RGB"))
+        except Exception as exc:
+            raise CacheError(f"failed to decode {path}: {type(exc).__name__}: {exc}") from exc
         return i, arr
 
     tmp = paths["images"].with_suffix(".tmp.npy")
     mm = np.lib.format.open_memmap(tmp, mode="w+", dtype=np.uint8,
                                    shape=(n, resolution, resolution, 3))
     t0 = time.time()
+    # [AUDIT C3] A failed build left the multi-gigabyte temporary array behind. It is now
+    # removed on any failure, after the memory map is released.
+    # Before:
+    #   try:
+    #       ...
+    #   finally:
+    #       del mm
+    failed = True
     try:
         with ThreadPoolExecutor(max_workers=workers) as pool:
             for start in range(0, n, BUILD_CHUNK):
                 stop = min(start + BUILD_CHUNK, n)
                 for i, arr in pool.map(decode, range(start, stop)):
-                    if arr.shape != (resolution, resolution, 3) or arr.dtype != np.uint8:
+                    if not isinstance(arr, np.ndarray) or arr.dtype != np.uint8 \
+                            or arr.shape != (resolution, resolution, 3):
                         raise CacheError(
-                            f"transform returned {arr.dtype} {arr.shape} for {samples[i][0]}, "
+                            f"transform returned {getattr(arr, 'dtype', type(arr).__name__)} "
+                            f"{getattr(arr, 'shape', '')} for {samples[i][0]}, "
                             f"expected uint8 ({resolution}, {resolution}, 3)")
                     mm[i] = arr
                 if progress:
                     print(f"  {split}@{resolution}px  {stop}/{n}", end="\r", flush=True)
         mm.flush()
+        failed = False
     finally:
         # Releasing the memory map before renaming is required on Windows, where an open
         # handle blocks the replace.
         del mm
+        if failed:
+            tmp.unlink(missing_ok=True)
     if progress:
         print()
 
-    np.save(paths["labels"], labels)
+    # [AUDIT C2] Labels and metadata are written through temporary files and renamed, like the
+    # image array, so neither can be observed half-written.
+    # Before:
+    #   np.save(paths["labels"], labels)
+    #   ...
+    #   paths["meta"].write_text(json.dumps(meta.to_dict(), indent=2))
+    labels_tmp = paths["labels"].with_suffix(".tmp.npy")
+    np.save(labels_tmp, labels)
+    os.replace(labels_tmp, paths["labels"])
     meta = CacheMetadata(
         dataset=dataset, split=split, resolution=resolution, n_samples=n,
         n_classes=n_classes, classes=list(classes),
@@ -395,9 +480,14 @@ def build_cache(samples: Sequence[tuple[Path, int]],
         built_at=time.strftime("%Y-%m-%d %H:%M:%S"),
         build_seconds=round(time.time() - t0, 1),
     )
-    paths["meta"].write_text(json.dumps(meta.to_dict(), indent=2))
-    # Published last: the image array is what cache_exists checks for most strongly, so it
-    # becomes visible only once labels and metadata are already on disk.
+    meta_tmp = paths["meta"].with_suffix(".tmp.json")
+    meta_tmp.write_text(json.dumps(meta.to_dict(), indent=2))
+    os.replace(meta_tmp, paths["meta"])
+    # [AUDIT C8] Comment corrected: cache_exists requires all three files equally. The image
+    # array is published last so the set is complete only once labels and metadata are final.
+    # Before:
+    #   # Published last: the image array is what cache_exists checks for most strongly, so it
+    #   # becomes visible only once labels and metadata are already on disk.
     os.replace(tmp, paths["images"])
     return meta
 
@@ -468,6 +558,19 @@ class ImageCache:
         if meta.label_digest and meta.label_digest != _digest(labels):
             raise CacheError(
                 "label digest mismatch: the label file has changed since the cache was built")
+        # [AUDIT C5] Label dtype and range, and the metadata's own resolution and class count,
+        # were never checked.
+        # Before: (validation ended at the digest check)
+        if labels.dtype != LABEL_DTYPE:
+            raise CacheError(f"labels are {labels.dtype}, expected {np.dtype(LABEL_DTYPE)}")
+        if meta.resolution != resolution:
+            raise CacheError(f"metadata records {meta.resolution}px, requested {resolution}px")
+        if len(meta.classes) != meta.n_classes:
+            raise CacheError(f"metadata lists {len(meta.classes)} class names but "
+                             f"n_classes={meta.n_classes}")
+        if len(labels) and (labels.min() < 0 or labels.max() >= meta.n_classes):
+            raise CacheError(f"labels span [{labels.min()}, {labels.max()}], outside "
+                             f"[0, {meta.n_classes})")
         return cls(images, labels, meta)
 
     # ---- properties ---------------------------------------------------------------------
@@ -519,15 +622,18 @@ class ImageCache:
 
     # ---- access -------------------------------------------------------------------------
 
-    def take(self, indices: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    def take(self, indices: np.ndarray,
+             out: np.ndarray | None = None) -> tuple[np.ndarray, np.ndarray]:
         """Read a set of samples into memory.
 
         Args:
             indices: Indices to read. Sorting them first gives sequential access to the memory
                 map, which is markedly faster than random access.
+            out: Optional preallocated uint8 array of shape (len(indices), H, W, 3) to read
+                into, for example a pinned host buffer, avoiding any intermediate copy.
 
         Returns:
-            A writable uint8 NHWC image array and its int64 labels.
+            A writable uint8 NHWC image array (out, when given) and its int64 labels.
 
         Raises:
             CacheError: If any index is out of range.
@@ -536,9 +642,18 @@ class ImageCache:
         if idx.size and (idx.min() < 0 or idx.max() >= len(self._labels)):
             raise CacheError(
                 f"indices span [{idx.min()}, {idx.max()}], cache holds {len(self._labels)}")
-        # np.array forces a writable copy: a memory-map slice is read-only, and
-        # torch.from_numpy on a read-only buffer warns and yields an unsafe tensor.
-        return np.array(self._images[idx]), self._labels[idx]
+        # [AUDIT C4] Indexing with an array already returns a new, writable array; the extra
+        # np.array copied every batch a second time. The read-only concern applies only to
+        # basic slicing, handled in slice() below.
+        # Before:
+        #   # np.array forces a writable copy: a memory-map slice is read-only, and
+        #   # torch.from_numpy on a read-only buffer warns and yields an unsafe tensor.
+        #   return np.array(self._images[idx]), self._labels[idx]
+        if out is not None:
+            # mode="clip" skips take's internal buffering; bounds were checked above.
+            np.take(self._images, idx, axis=0, out=out, mode="clip")
+            return out, self._labels[idx]
+        return np.asarray(self._images[idx]), self._labels[idx]
 
     def slice(self, start: int, stop: int) -> tuple[np.ndarray, np.ndarray]:
         """Read a contiguous range of samples.
@@ -549,7 +664,17 @@ class ImageCache:
 
         Returns:
             A writable uint8 NHWC image array and its int64 labels.
+
+        Raises:
+            CacheError: If the range falls outside the cache.
         """
+        # [AUDIT C8] numpy clips out-of-range slices silently, returning fewer items than asked.
+        # Before: (no check)
+        if not 0 <= start <= stop <= len(self._labels):
+            raise CacheError(
+                f"slice [{start}, {stop}) is outside the cache of {len(self._labels)}")
+        # np.array forces a writable copy: a memory-map slice is read-only, and
+        # torch.from_numpy on a read-only buffer warns and yields an unsafe tensor.
         return np.array(self._images[start:stop]), self._labels[start:stop]
 
     def describe(self) -> str:

@@ -23,7 +23,11 @@ from typing import Any, Mapping
 
 # Mixed-precision dtypes accepted by the trainer. bfloat16 is preferred on Ampere and later:
 # it carries the fp32 exponent range, so training needs no gradient scaler.
-AMP_DTYPES: tuple[str, ...] = ("float32", "float16", "bfloat16")
+# [AUDIT T3] float16 removed: the trainer has no GradScaler, so fp16 gradients underflow
+# silently. Re-add it only together with GradScaler support in trainer.py.
+# Before:
+#   AMP_DTYPES: tuple[str, ...] = ("float32", "float16", "bfloat16")
+AMP_DTYPES: tuple[str, ...] = ("float32", "bfloat16")
 
 OPTIMIZERS: tuple[str, ...] = ("adamw", "sgd")
 SCHEDULERS: tuple[str, ...] = ("cosine", "step", "constant")
@@ -32,9 +36,50 @@ SCHEDULERS: tuple[str, ...] = ("cosine", "step", "constant")
 # will ever hold, while remaining short enough to read in a filename or a CSV cell.
 DIGEST_LENGTH: int = 12
 
+# Default ratio of the training cache side to train_res when train_cache_res is not set. The
+# random-resized-crop then samples from a source larger than its output, so crops are mostly
+# downsampled rather than upsampled from a 160px centre crop.
+TRAIN_CACHE_SCALE: float = 1.25
+
 
 class ConfigError(ValueError):
     """Raised when a configuration is internally inconsistent or malformed."""
+
+
+def _coerce_scalar(value: Any, kind: str, name: str) -> Any:
+    """Convert a scalar field to its declared type.
+
+    YAML 1.1 reads "2e-3" as a string and "1" as an int, so without conversion a file could
+    train at a learning rate other than the one it states, and "lr: 1" and "lr: 1.0" would
+    hash differently despite describing the same recipe.
+
+    Args:
+        value: Candidate value.
+        kind: Declared type name: "int", "float" or "str".
+        name: Field name, used in the error message.
+
+    Returns:
+        The value converted to the declared type.
+
+    Raises:
+        ConfigError: If the value cannot be represented exactly in the declared type.
+    """
+    if kind == "str":
+        if not isinstance(value, str):
+            raise ConfigError(f"{name} must be a string, got {value!r}")
+        return value
+    # bool is an int subclass; "epochs: true" is a typo, never an intent.
+    if isinstance(value, bool):
+        raise ConfigError(f"{name} must be a number, got {value!r}")
+    try:
+        number = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ConfigError(f"{name} must be a number, got {value!r}") from exc
+    if kind == "float":
+        return number
+    if not number.is_integer():
+        raise ConfigError(f"{name} must be an integer, got {value!r}")
+    return int(number)
 
 
 def _coerce_pair(value: Any, name: str) -> tuple[float, float]:
@@ -56,9 +101,14 @@ def _coerce_pair(value: Any, name: str) -> tuple[float, float]:
     """
     try:
         lo, hi = value
-        return (float(lo), float(hi))
     except (TypeError, ValueError) as exc:
         raise ConfigError(f"{name} must be a two-element sequence, got {value!r}") from exc
+    # [AUDIT F1] Elements go through the same scalar coercion as every other field, so a
+    # boolean or a non-numeric string is a ConfigError rather than a silent float().
+    # Before:
+    #   lo, hi = value
+    #   return (float(lo), float(hi))
+    return (_coerce_scalar(lo, "float", name), _coerce_scalar(hi, "float", name))
 
 
 @dataclass(frozen=True)
@@ -79,6 +129,9 @@ class RecipeConfig:
     Attributes:
         num_classes: Size of the classifier output.
         train_res: Resolution images are trained at.
+        train_cache_res: Side length of the cached training images the random-resized-crop
+            samples from. None means round(train_res * TRAIN_CACHE_SCALE). Hashed, because the
+            source resolution changes how much detail each crop carries.
         eval_res: Resolution images are evaluated at. Training below evaluation resolution is a
             budget technique that also exploits the train-test resolution discrepancy
             (Touvron et al., 2019).
@@ -111,6 +164,11 @@ class RecipeConfig:
     # --- data ---
     num_classes: int = 100
     train_res: int = 160
+    # [AUDIT P1] New recipe parameter. The training cache used to be stored at train_res, so
+    # every random crop was upsampled from a 160px centre crop. Adding this field changes every
+    # existing digest, as documented in the class NOTE above.
+    # Before: (no field; the cache side was always train_res)
+    train_cache_res: int | None = None
     eval_res: int = 224
     eval_crop_pct: float = 0.875
 
@@ -148,8 +206,20 @@ class RecipeConfig:
         Raises:
             ConfigError: If any field is out of range or the combination is inconsistent.
         """
-        object.__setattr__(self, "rrc_scale", _coerce_pair(self.rrc_scale, "rrc_scale"))
-        object.__setattr__(self, "rrc_ratio", _coerce_pair(self.rrc_ratio, "rrc_ratio"))
+        # [AUDIT F1] Every field is converted to its declared type before validation, so a
+        # YAML string like "2e-3" becomes 0.002 and "lr: 1" hashes the same as "lr: 1.0".
+        # Before: only the two pairs were coerced:
+        #   object.__setattr__(self, "rrc_scale", _coerce_pair(self.rrc_scale, "rrc_scale"))
+        #   object.__setattr__(self, "rrc_ratio", _coerce_pair(self.rrc_ratio, "rrc_ratio"))
+        for f in fields(self):
+            value = getattr(self, f.name)
+            if f.type.startswith("tuple"):
+                value = _coerce_pair(value, f.name)
+            elif value is None and "None" in f.type:
+                continue
+            else:
+                value = _coerce_scalar(value, f.type.split(" |")[0], f.name)
+            object.__setattr__(self, f.name, value)
         self._validate()
 
     def _validate(self) -> None:
@@ -168,6 +238,9 @@ class RecipeConfig:
         for name in ("train_res", "eval_res", "epochs", "batch_size"):
             if getattr(self, name) <= 0:
                 err.append(f"{name} must be positive, got {getattr(self, name)}")
+        if self.train_cache_res is not None and self.train_cache_res < self.train_res:
+            err.append(f"train_cache_res ({self.train_cache_res}) must be at least "
+                       f"train_res ({self.train_res})")
         if not 0 < self.eval_crop_pct <= 1:
             err.append(f"eval_crop_pct must be in (0, 1], got {self.eval_crop_pct}")
 
@@ -235,17 +308,30 @@ class RecipeConfig:
         """
         return int(round(self.eval_res / self.eval_crop_pct))
 
+    @property
+    def train_cache_resolution(self) -> int:
+        """Side length of the cached training images.
+
+        Returns:
+            train_cache_res when set, otherwise round(train_res * TRAIN_CACHE_SCALE).
+        """
+        if self.train_cache_res is not None:
+            return self.train_cache_res
+        return int(round(self.train_res * TRAIN_CACHE_SCALE))
+
     def to_dict(self) -> dict[str, Any]:
         """Serialise to a plain dictionary.
 
         Returns:
             Mapping of field name to value, with tuples converted to lists so the result is
-            directly JSON- and YAML-serialisable.
+            directly JSON- and YAML-serialisable. train_cache_res is written resolved, so a
+            recipe that leaves it unset hashes the same as one that states the default.
         """
         out = asdict(self)
         for k, v in out.items():
             if isinstance(v, tuple):
                 out[k] = list(v)
+        out["train_cache_res"] = self.train_cache_resolution
         return out
 
     @classmethod
@@ -305,10 +391,17 @@ class RecipeConfig:
         """
         return (f"[{self.digest()}] {self.optimizer} lr={self.lr:g} wd={self.weight_decay:g} "
                 f"bs={self.batch_size} ep={self.epochs} warmup={self.warmup_epochs} "
-                f"{self.train_res}->{self.eval_res}px {self.amp_dtype}")
+                f"{self.train_cache_resolution}/{self.train_res}->{self.eval_res}px "
+                f"{self.amp_dtype}")
 
 
-@dataclass
+# [AUDIT F2] Frozen, so overrides must go through dataclasses.replace(), which re-runs
+# __post_init__ validation. Direct assignment used to accept limit_batches=0 and
+# micro_batch_size=0 unchecked.
+# Before:
+#   @dataclass
+#   class RunConfig:
+@dataclass(frozen=True)
 class RunConfig:
     """
     Execution settings that cannot change the trained weights, so they are not hashed.
@@ -327,22 +420,29 @@ class RunConfig:
         compile: Whether to wrap the model with torch.compile.
         channels_last: Whether to use the channels-last memory format, which suits tensor-core
             convolution kernels.
-        workers: Loader worker count, where the loader supports it.
+        workers: Decoding threads used when building a cache. None picks a default from the
+            CPU count.
         prefetch: Batches prepared ahead of the device.
         limit_batches: Cap on batches per epoch, for smoke tests only.
         debug: Route outputs to isolated debug directories so trial runs cannot contaminate
             recorded results.
         resume: Whether to continue from an interrupted run of the same recipe.
         checkpoint_every: Epoch interval between resume checkpoints.
-        log_every: Step interval between progress lines; 0 logs once per epoch.
-        output_tag: Optional suffix distinguishing concurrent runs of one recipe.
+        log_every: Micro-batch interval between progress lines and loss finiteness checks;
+            0 logs once per epoch.
+        output_tag: Optional suffix distinguishing concurrent runs of one recipe. Not yet
+            read anywhere: reserved for concurrent-run support (audit R2, deferred).
     """
 
     device: str = "auto"
     micro_batch_size: int | None = None
     compile: bool = False
     channels_last: bool = True
-    workers: int = 4
+    # [AUDIT F3] workers was never read; it now sets the cache-build thread count. None keeps
+    # build_cache's own CPU-based default, which a fixed 4 would have slowed down.
+    # Before:
+    #   workers: int = 4
+    workers: int | None = None
     prefetch: int = 4
     limit_batches: int | None = None
     debug: bool = False
@@ -363,8 +463,12 @@ class RunConfig:
         err: list[str] = []
         if self.micro_batch_size is not None and self.micro_batch_size <= 0:
             err.append(f"micro_batch_size must be positive or None, got {self.micro_batch_size}")
-        if self.workers < 0:
-            err.append(f"workers must be non-negative, got {self.workers}")
+        # [AUDIT F3/C8] A thread pool needs at least one worker.
+        # Before:
+        #   if self.workers < 0:
+        #       err.append(f"workers must be non-negative, got {self.workers}")
+        if self.workers is not None and self.workers < 1:
+            err.append(f"workers must be positive or None, got {self.workers}")
         if self.prefetch < 1:
             err.append(f"prefetch must be at least 1, got {self.prefetch}")
         if self.limit_batches is not None and self.limit_batches <= 0:

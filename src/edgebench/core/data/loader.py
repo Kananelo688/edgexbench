@@ -15,6 +15,7 @@ DATE-CREATED:   2026-10-27
 
 from __future__ import annotations
 
+import functools
 import math
 import queue
 import threading
@@ -66,9 +67,34 @@ class Normalisation:
         Returns:
             Mean and standard deviation, each shaped (1, 3, 1, 1) and scaled to [0,255].
         """
-        m = torch.tensor(self.mean, device=device, dtype=dtype).view(1, 3, 1, 1) * 255.0
-        s = torch.tensor(self.std, device=device, dtype=dtype).view(1, 3, 1, 1) * 255.0
-        return m, s
+        # [AUDIT L4] Built on every call, i.e. two small synchronous host-to-device copies per
+        # batch. Now cached per (statistics, device, dtype). The cached tensors are shared, so
+        # callers must not modify them in place.
+        # Before:
+        #   m = torch.tensor(self.mean, device=device, dtype=dtype).view(1, 3, 1, 1) * 255.0
+        #   s = torch.tensor(self.std, device=device, dtype=dtype).view(1, 3, 1, 1) * 255.0
+        #   return m, s
+        return _norm_tensors(self.mean, self.std, torch.device(device), dtype)
+
+
+@functools.lru_cache(maxsize=None)
+def _norm_tensors(mean: tuple[float, float, float], std: tuple[float, float, float],
+                  device: torch.device,
+                  dtype: torch.dtype) -> tuple[torch.Tensor, torch.Tensor]:
+    """Build the scaled normalisation tensors once per combination.
+
+    Args:
+        mean: Per-channel means in [0,1] space.
+        std: Per-channel standard deviations in [0,1] space.
+        device: Device to place the tensors on.
+        dtype: Element type.
+
+    Returns:
+        Mean and standard deviation, each shaped (1, 3, 1, 1) and scaled to [0,255].
+    """
+    m = torch.tensor(mean, device=device, dtype=dtype).view(1, 3, 1, 1) * 255.0
+    s = torch.tensor(std, device=device, dtype=dtype).view(1, 3, 1, 1) * 255.0
+    return m, s
 
 
 def normalise(x: torch.Tensor, norm: Normalisation) -> torch.Tensor:
@@ -111,9 +137,11 @@ def random_resized_crop_flip(batch_u8: torch.Tensor,
 
     NOTE: this is not bit-identical to torchvision.transforms.RandomResizedCrop. That
     implementation retries up to ten times to fit a box inside the image and falls back to a
-    centre crop, whereas this one draws once and clamps the box to the image bounds. The
-    distributions differ slightly at extreme scale and aspect draws. The same procedure is
-    applied to every architecture, so it cannot bias a comparison between them.
+    centre crop, whereas this one draws once and clamps the box to the image bounds. A clamped
+    box no longer has the drawn aspect ratio, so it is stretched when resampled to a square;
+    this is frequent for scale draws near 1.0 with a non-square ratio. The same procedure is
+    applied to every architecture, so it cannot bias a comparison between them. (Audit L7:
+    documented, not changed.)
 
     Args:
         batch_u8: uint8 NHWC batch of square images.
@@ -129,8 +157,14 @@ def random_resized_crop_flip(batch_u8: torch.Tensor,
     Raises:
         LoaderError: If the batch is not square uint8 NHWC.
     """
-    if batch_u8.ndim != 4 or batch_u8.shape[3] != 3 or batch_u8.shape[1] != batch_u8.shape[2]:
-        raise LoaderError(f"expected square uint8 NHWC, got {tuple(batch_u8.shape)}")
+    # [AUDIT L6] The message promised uint8 but the dtype was never checked.
+    # Before:
+    #   if batch_u8.ndim != 4 or batch_u8.shape[3] != 3 or batch_u8.shape[1] != batch_u8.shape[2]:
+    #       raise LoaderError(f"expected square uint8 NHWC, got {tuple(batch_u8.shape)}")
+    if batch_u8.dtype != torch.uint8 or batch_u8.ndim != 4 or batch_u8.shape[3] != 3 \
+            or batch_u8.shape[1] != batch_u8.shape[2]:
+        raise LoaderError(f"expected square uint8 NHWC, got {batch_u8.dtype} "
+                          f"{tuple(batch_u8.shape)}")
 
     n, src = batch_u8.shape[0], batch_u8.shape[1]
     x = to_nchw_float(batch_u8)
@@ -215,7 +249,8 @@ class CacheLoader:
                 copies.
 
         Raises:
-            LoaderError: If batch_size or prefetch is not positive, or indices are out of range.
+            LoaderError: If batch_size or prefetch is not positive, indices are out of range,
+                or the configuration yields no batches.
         """
         if batch_size <= 0:
             raise LoaderError(f"batch_size must be positive, got {batch_size}")
@@ -246,6 +281,13 @@ class CacheLoader:
         full = self.n_items // batch_size if self.drop_last \
             else math.ceil(self.n_items / batch_size)
         self.n_batches = min(full, limit_batches) if limit_batches else full
+        # [AUDIT L5] drop_last with fewer items than one batch gave zero batches, so a training
+        # epoch silently did nothing.
+        # Before: (no check)
+        if self.n_batches == 0:
+            raise LoaderError(
+                f"no batches: {self.n_items} items, batch_size {batch_size}, "
+                f"drop_last={self.drop_last}")
 
     def set_epoch(self, epoch: int) -> None:
         """Select the permutation used for the next iteration.
@@ -286,14 +328,68 @@ class CacheLoader:
         base = np.arange(len(self.cache)) if self.indices is None else self.indices
         if not self.shuffle:
             return base
-        return np.random.default_rng(self.seed + self.epoch).permutation(base)
+        # [AUDIT L2] seed + epoch made seed 42 / epoch 1 identical to seed 43 / epoch 0,
+        # correlating the data order of runs meant to estimate seed noise. Seeding with the
+        # pair goes through a SeedSequence, giving independent streams.
+        # Before:
+        #   return np.random.default_rng(self.seed + self.epoch).permutation(base)
+        return np.random.default_rng([self.seed, self.epoch]).permutation(base)
 
-    def _produce(self, order: np.ndarray, out: queue.Queue) -> None:
+    def _put(self, out: queue.Queue, item, stop: threading.Event) -> bool:
+        """Place an item on the queue unless the consumer has gone away.
+
+        Args:
+            out: Bounded queue shared with the consumer.
+            item: Item to enqueue.
+            stop: Set by the consumer when it stops iterating.
+
+        Returns:
+            True if the item was enqueued, False if the consumer stopped first.
+        """
+        while not stop.is_set():
+            try:
+                out.put(item, timeout=0.1)
+                return True
+            except queue.Full:
+                continue
+        return False
+
+    def _read(self, batch_idx: np.ndarray) -> tuple[torch.Tensor, torch.Tensor]:
+        """Read one batch from the cache as tensors.
+
+        Args:
+            batch_idx: Cache indices, sorted.
+
+        Returns:
+            uint8 NHWC images and int64 labels, pinned when pin_memory is set.
+        """
+        # [AUDIT L3] Every batch used to be copied three times: by fancy indexing, by an
+        # np.array in ImageCache.take, and by pin_memory(). With pinning, images are now read
+        # straight into a freshly allocated pinned tensor: one copy. Allocating per batch
+        # rather than reusing a ring is deliberate: torch's caching host allocator will not
+        # hand a block back out while a non_blocking copy from it is still in flight, which a
+        # hand-rolled ring could not guarantee.
+        # Before:
+        #   images, labels = self.cache.take(np.sort(batch_idx))
+        #   xb = torch.from_numpy(images)
+        #   yb = torch.from_numpy(labels)
+        #   if self.pin_memory:
+        #       xb, yb = xb.pin_memory(), yb.pin_memory()
+        if self.pin_memory:
+            res = self.cache.resolution
+            xb = torch.empty((len(batch_idx), res, res, 3), dtype=torch.uint8, pin_memory=True)
+            _, labels = self.cache.take(batch_idx, out=xb.numpy())
+            return xb, torch.from_numpy(labels).pin_memory()
+        images, labels = self.cache.take(batch_idx)
+        return torch.from_numpy(images), torch.from_numpy(labels)
+
+    def _produce(self, order: np.ndarray, out: queue.Queue, stop: threading.Event) -> None:
         """Read batches on a background thread and place them on the queue.
 
         Args:
             order: Item order for this epoch.
             out: Bounded queue receiving (images, labels) or a sentinel.
+            stop: Set by the consumer when it stops iterating; the thread then exits.
 
         Returns:
             None.
@@ -304,15 +400,11 @@ class CacheLoader:
                     break
                 # Sorting within the batch converts scattered memory-map reads into a mostly
                 # sequential pattern; order inside a batch has no effect on training.
-                images, labels = self.cache.take(np.sort(batch_idx))
-                xb = torch.from_numpy(images)
-                yb = torch.from_numpy(labels)
-                if self.pin_memory:
-                    xb, yb = xb.pin_memory(), yb.pin_memory()
-                out.put((xb, yb))
-            out.put(None)
+                if not self._put(out, self._read(np.sort(batch_idx)), stop):
+                    return
+            self._put(out, None, stop)
         except Exception as exc:  # re-raised in the consumer so errors are not swallowed
-            out.put(exc)
+            self._put(out, exc, stop)
 
     def __iter__(self) -> Iterator[tuple[torch.Tensor, torch.Tensor]]:
         """Iterate one epoch.
@@ -323,14 +415,35 @@ class CacheLoader:
         Raises:
             Exception: Any exception raised by the producer thread, re-raised here.
         """
+        # [AUDIT L1] If the consumer stopped early (an exception mid-epoch, or a break), the
+        # producer blocked forever on a full queue, leaking a thread and its pinned batches for
+        # every failed model in a sweep. The consumer now signals the producer to exit and
+        # drains the queue so a blocked put returns.
+        # Before:
+        #   threading.Thread(target=self._produce, args=(order, q), daemon=True).start()
+        #   while True:
+        #       item = q.get()
+        #       ...
+        #       yield item
         order = self._order()
         q: queue.Queue = queue.Queue(self.prefetch)
+        stop = threading.Event()
         # Daemon thread: a crash in the consumer must not leave the process unable to exit.
-        threading.Thread(target=self._produce, args=(order, q), daemon=True).start()
-        while True:
-            item = q.get()
-            if item is None:
-                return
-            if isinstance(item, Exception):
-                raise item
-            yield item
+        producer = threading.Thread(target=self._produce, args=(order, q, stop), daemon=True)
+        producer.start()
+        try:
+            while True:
+                item = q.get()
+                if item is None:
+                    return
+                if isinstance(item, Exception):
+                    raise item
+                yield item
+        finally:
+            stop.set()
+            while True:
+                try:
+                    q.get_nowait()
+                except queue.Empty:
+                    break
+            producer.join(timeout=5.0)
