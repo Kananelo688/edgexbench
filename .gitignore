@@ -7,6 +7,8 @@ __pycache__/
 *.egg-info/
 build/
 dist/
+tmp/
+
 
 # Generated trees (see core/paths.py). calib_datasets/ is deliberately NOT ignored: it is
 # committed so the calibration set is byte-identical across backends.

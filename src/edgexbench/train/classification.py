@@ -29,6 +29,9 @@ from edgexbench.core.registry import ModelSpec, RegistryError
 from edgexbench.core.results import (STATUS_COMPLETED, STATUS_FAILED, ResultsError,
                                     ResultsLayout, ResultsStore)
 from edgexbench.train.trainer import EpochRecord, Trainer, TrainingResult, resolve_device
+from edgexbench.models.external import register_all
+
+register_all()
 
 TASK = "classification"
 

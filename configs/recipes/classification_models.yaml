@@ -1,0 +1,31 @@
+
+task: classification
+dataset: imageNet-100
+recipe:
+  num_classes: 100
+  epochs: 100
+run:
+  micro_batch_size: 128
+models:
+  - mobilenetv1_100
+  - mobilenetv2_100
+  - mobilenetv3_small_100
+  - mobilenetv3_large_100
+  - mobilenetv3_conv_small
+  - mobilenetv4_conv_small
+  - mobilenetv4_hybrid_medium
+  - efficientnet_lite0
+  - efficientnet_b0
+  - ghostnet_100
+  - ghostnetv2_100
+  - ghostnetv3_100
+  - squeezenet1_0
+  - squeezenet1_1
+  - shufflenetv1_1_0x_g3
+  - name: shufflenet_v2_x1_0
+    source: torchvision
+  - name: inception_v3
+    source: torchvision
+    kwargs:
+      aux_logits: false
+   
