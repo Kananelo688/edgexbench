@@ -1,0 +1,2 @@
+model,status,recipe_digest,source,provider_version,dataset,epochs,top1,top5,val_loss,train_loss,best_top1,best_epoch,train_res,train_cache_res,eval_res,batch_size,micro_batch_size,train_minutes,seconds_per_epoch,images_per_second,peak_memory_mb,seed,amp_dtype,device,torch_version,checkpoint,error
+mobilenetv2_100,completed,73450bea4c00,timm,1.0.30,imageNet-100,1,17.28,44.86,3.49534609375,4.07791910406404,17.28,1,160,200,224,256,128,1.7,101.7,1277.2,2574.6,42,bfloat16,NVIDIA GeForce RTX 4060 Ti,2.11.0+cu128,checkpoint\pytorch\classification_debug\mobilenetv2_100.pt,

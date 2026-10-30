@@ -1,0 +1,2 @@
+epoch,train_loss,val_loss,top1,top5,lr,epoch_seconds,images_per_second,model,recipe_digest
+1,4.07791910406404,3.49534609375,17.28,44.86,1.0019026724148544e-05,101.72,1277.2,mobilenetv2_100,73450bea4c00
