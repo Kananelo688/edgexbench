@@ -11,7 +11,6 @@ models:
   - mobilenetv2_100
   - mobilenetv3_small_100
   - mobilenetv3_large_100
-  - mobilenetv3_conv_small
   - mobilenetv4_conv_small
   - mobilenetv4_hybrid_medium
   - efficientnet_lite0
@@ -24,8 +23,4 @@ models:
   - shufflenetv1_1_0x_g3
   - name: shufflenet_v2_x1_0
     source: torchvision
-  - name: inception_v3
-    source: torchvision
-    kwargs:
-      aux_logits: false
    
